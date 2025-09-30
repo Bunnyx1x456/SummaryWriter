@@ -1,18 +1,56 @@
-
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { RecordingStatus } from './types';
 import { useSpeechToText } from './hooks/useSpeechToText';
 import { summarizeLecture } from './services/geminiService';
 import Recorder from './components/Recorder';
 import SummaryDisplay from './components/SummaryDisplay';
-import { LogoIcon } from './components/Icons';
+import { LogoIcon, EditIcon } from './components/Icons';
+import ApiKeyInput from './components/ApiKeyInput';
 
 const App: React.FC = () => {
   const [status, setStatus] = useState<RecordingStatus>(RecordingStatus.IDLE);
   const [summary, setSummary] = useState<string>('');
   const [error, setError] = useState<string>('');
+  const [apiKey, setApiKey] = useState<string | null>(null);
 
-  const { isListening, transcript, startListening, stopListening, isSupported } = useSpeechToText();
+  useEffect(() => {
+    try {
+      const storedKey = localStorage.getItem('gemini-api-key');
+      if (storedKey) {
+        setApiKey(storedKey);
+      }
+    } catch (e) {
+      console.error("Could not access localStorage:", e);
+    }
+  }, []);
+
+  const { transcript, startListening, stopListening, isSupported } = useSpeechToText();
+
+  const handleSaveApiKey = (key: string) => {
+    if (key.trim()) {
+      const trimmedKey = key.trim();
+      try {
+        localStorage.setItem('gemini-api-key', trimmedKey);
+        setApiKey(trimmedKey);
+      } catch(e) {
+        console.error("Could not save to localStorage:", e);
+        // Fallback for environments where localStorage is blocked
+        setApiKey(trimmedKey);
+      }
+    }
+  };
+  
+  const handleClearApiKey = () => {
+    try {
+      localStorage.removeItem('gemini-api-key');
+    } catch(e) {
+       console.error("Could not clear localStorage:", e);
+    }
+    setApiKey(null);
+    setStatus(RecordingStatus.IDLE);
+    setError('');
+    setSummary('');
+  };
 
   const handleStart = useCallback(() => {
     setError('');
@@ -25,23 +63,31 @@ const App: React.FC = () => {
     stopListening();
     setStatus(RecordingStatus.PROCESSING);
     
-    // A short delay to allow final transcript processing
     setTimeout(async () => {
+      if (!apiKey) {
+        setError('API ключ не встановлено. Будь ласка, оновіть сторінку та введіть ключ.');
+        setStatus(RecordingStatus.ERROR);
+        return;
+      }
       if (!transcript.trim()) {
         setError('Не вдалося розпізнати мовлення. Спробуйте ще раз у тихішому середовищі.');
         setStatus(RecordingStatus.ERROR);
         return;
       }
       try {
-        const result = await summarizeLecture(transcript);
+        const result = await summarizeLecture(transcript, apiKey);
         setSummary(result);
         setStatus(RecordingStatus.DONE);
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Сталася невідома помилка.');
+        const errorMessage = err instanceof Error ? err.message : 'Сталася невідома помилка.';
+        setError(errorMessage);
         setStatus(RecordingStatus.ERROR);
+        if (errorMessage.includes('недійсний')) {
+            handleClearApiKey();
+        }
       }
     }, 500);
-  }, [stopListening, transcript]);
+  }, [stopListening, transcript, apiKey]);
 
   const handleReset = useCallback(() => {
     setStatus(RecordingStatus.IDLE);
@@ -72,6 +118,10 @@ const App: React.FC = () => {
     }
   };
 
+  if (!apiKey) {
+    return <ApiKeyInput onSave={handleSaveApiKey} />;
+  }
+
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-4 font-sans">
       <header className="mb-8 text-center">
@@ -86,6 +136,14 @@ const App: React.FC = () => {
       </main>
       <footer className="mt-8 text-center text-slate-400 text-sm">
         <p>Працює на базі Gemini 2.5 Flash</p>
+        <button
+          onClick={handleClearApiKey}
+          className="mt-2 inline-flex items-center gap-2 text-xs text-slate-500 hover:text-sky-600 hover:underline focus:outline-none focus:ring-2 focus:ring-sky-500 rounded"
+          aria-label="Змінити API ключ"
+        >
+          <EditIcon className="w-4 h-4" />
+          <span>Змінити API ключ</span>
+        </button>
       </footer>
     </div>
   );
